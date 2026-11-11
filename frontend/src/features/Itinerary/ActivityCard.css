@@ -1,0 +1,36 @@
+.activity-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #fafafa;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+  font-size: 1rem;
+  font-weight: 500;
+  color: #333;
+  transition: background-color 0.2s ease;
+}
+
+.activity-card:hover {
+  background-color: #f0f0f0;
+}
+
+.remove-btn {
+  background: transparent;
+  border: none;
+  color: #e74c3c;
+  font-size: 1.1rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.remove-btn:hover {
+  transform: scale(1.2);
+  color: #c0392b;
+}
+.drag-handle {
+  cursor: grab;
+  margin-right: 8px;
+}

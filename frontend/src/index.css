@@ -1,0 +1,74 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+#root {
+  margin: 0;
+  padding: 0;
+}
+
+/* Smooth transition */
+body, #root, div, header, nav, input, select, textarea {
+  transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+}
+
+/* Global Dark Mode Container Overrides */
+body.dark-mode,
+body.dark-mode #root,
+body.dark-mode main,
+body.dark-mode header,
+body.dark-mode nav,
+body.dark-mode .header,
+body.dark-mode .planner,
+body.dark-mode .planner-container,
+body.dark-mode .search-dashboard,
+body.dark-mode .itinerary-panel,
+body.dark-mode .filter-panel,
+body.dark-mode .card,
+body.dark-mode .activity-card,
+body.dark-mode .home,
+body.dark-mode .not-found {
+  background-color: #121212 !important;
+  color: #e0e0e0 !important;
+}
+
+/* Text and Headings */
+body.dark-mode h1,
+body.dark-mode h2,
+body.dark-mode h3,
+body.dark-mode h4,
+body.dark-mode p,
+body.dark-mode span:not(.button),
+body.dark-mode label {
+  color: #e0e0e0 !important;
+}
+
+/* Form Controls & Dropdowns */
+body.dark-mode input,
+body.dark-mode select,
+body.dark-mode textarea,
+body.dark-mode .dropdown__field,
+body.dark-mode .dropdown__list,
+body.dark-mode .dropdown__list-item {
+  background-color: #1e1e1e !important;
+  color: #ffffff !important;
+  border-color: #333333 !important;
+}
+
+/* Data Viewer & Tables */
+body.dark-mode table,
+body.dark-mode th,
+body.dark-mode td {
+  background-color: #1e1e1e !important;
+  color: #e0e0e0 !important;
+  border-color: #333333 !important;
+}
+
+/* Subtle card & panel borders */
+body.dark-mode .search-dashboard,
+body.dark-mode .itinerary-panel,
+body.dark-mode .filter-panel {
+  border-color: #2d2d2d !important;
+}

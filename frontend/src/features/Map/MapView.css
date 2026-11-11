@@ -1,0 +1,25 @@
+.map-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  z-index: 0;
+}
+
+.mapboxgl-canvas {
+  height: 100%;
+  width: 100%;
+  display: block;
+}
+
+.mapboxgl-popup {
+  max-width: 200px;
+  font-family: "Inter", sans-serif;
+  font-size: 0.9rem;
+}
+
+.mapboxgl-popup-content {
+  padding: 0.5rem 0.75rem;
+  background-color: white;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}

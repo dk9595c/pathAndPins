@@ -1,0 +1,65 @@
+.planner-container {
+  display: flex;
+  flex-direction: row;
+  height: 100vh;
+  width: 100%;
+}
+
+.planner-map {
+  flex-grow: 1;
+  position: relative;
+  height: 100%;
+}
+
+.mobile-toggle {
+  display: none;
+}
+
+/*
+ * Task B: Mobile Responsive Design (max-width 768px).
+ * On small screens (like Samsung Galaxy S8+ at 360x740px),
+ * use a toggle to switch between the panel and the map.
+ */
+@media (max-width: 768px) {
+  .planner-container {
+    flex-direction: column;
+  }
+  
+  .mobile-toggle {
+    display: flex;
+    gap: 10px;
+    padding: 10px;
+    background: #ffffff;
+    border-bottom: 1px solid #afafaf;
+    justify-content: center;
+  }
+
+  .mobile-toggle button {
+    padding: 8px 16px;
+    border: 2px solid #0b2c3d;
+    background: #ffffff;
+    color: #0b2c3d;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    flex: 1;
+  }
+
+  .mobile-toggle button.active {
+    background: #0b2c3d;
+    color: #ffffff;
+  }
+  
+  /* Toggle logic handled by CSS classes from Planner.tsx */
+  .planner-container.show-map .itinerary-panel {
+    display: none;
+  }
+  
+  .planner-container.show-itinerary .planner-map {
+    display: none;
+  }
+
+  .planner-map {
+    height: calc(100vh - 60px); /* adjust for toggle bar height */
+  }
+}
