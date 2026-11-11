@@ -1,0 +1,29 @@
+{
+  "tileKey": "test_tile",
+  "nodes": [
+    {
+      "id": "node_sig",
+      "lat": 41.82,
+      "lon": -71.41
+    },
+    {
+      "id": "node_regular",
+      "lat": 41.83,
+      "lon": -71.41
+    }
+  ],
+  "neighbors": {
+    "node_regular": [
+      {
+        "id": "node_sig",
+        "weight": 50
+      }
+    ],
+    "node_sig": [
+      {
+        "id": "node_regular",
+        "weight": 50
+      }
+    ]
+  }
+}

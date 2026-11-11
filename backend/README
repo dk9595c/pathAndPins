@@ -1,0 +1,344 @@
+GitHub link : https://github.com/cs0320-f26/proxy-gladiators95
+
+## Sprint 4: Real Data & APIs
+
+### Task A & B: Real Arrest Rates & FBI Integration
+Implemented the `/arrests` endpoint to fetch real arrest data from the FBI Crime Data Explorer (CDE) API. The architecture follows a multi-step geographic resolution pipeline:
+1. Translates `lat` and `lon` coordinates to Census FIPS codes and Place codes using the Census Geocoder API.
+2. Cross-references FIPS data against the `Law Enforcement Agency Identifiers Crosswalk-2012.csv` using the `tables32` CSV parser to resolve 9-character FBI ORIs.
+3. Formats dynamic requests to the FBI CDE API based on the requested `granularity` (`national`, `state`, or `agency`).
+4. Recursively extracts and sums arrest count data from nested, multi-series API responses, capping searches at the most recent available year.
+
+### Task C: CSV Parser Endpoint
+Implemented the `/getcsv` endpoint to expose local file parsing over HTTP. This endpoint integrates the `tables32` and `parse.ts` utilities from Sprint 2 into the Express server, allowing clients to dynamically request and receive JSON-formatted representations of static tabular datasets.
+
+### Task D: Real ACS Data
+Implemented the `/acs` endpoint to fetch demographic and economic data from the U.S. Census American Community Survey (ACS) 5-year estimates API.
+1. Hierarchy Enforcement: Enforces that topLevel strictly outranks bottomLevel across the geographic hierarchy (all > state > county > city/place). If an inverted or equivalent hierarchy is requested (such as county to state), the server responds with an informative 400 error.
+2. Conditional Geocoding: Bypasses coordinate resolution when topLevel is all because the query spans the entire country. When topLevel is state or county, it reverse geocodes coordinates via the Census Geocoder API to obtain state and county FIPS codes.
+3. Query Construction: Maps geographic levels to Census for and in parameters, formats variable lists without percent encoding comma delimiters, and automatically ensures NAME is included for human-readable row labeling.
+
+#### Tabular Design Questions
+1. How would you change tables32 to support ACS queries as a datasource?
+The Census ACS endpoint returns a two-dimensional array of strings with column headers at index 0 followed by row values. Rather than streaming from a file on disk, tables32 could be extended with an in memory adapter that accepts nested arrays or string streams directly, transforming rows into table records without requiring temporary disk storage.
+
+2. Why (or why not) are the other external APIs in this sprint appropriate for tables32?
+The FBI Crime Data Explorer arrest and employment endpoints return irregular, deeply nested JSON trees where keys change across reporting years, breakdown levels, and agencies. Because they require recursive traversal and domain specific aggregation rather than flat tabular row iteration, they do not map cleanly onto the rectangular row and column model of tables32.
+
+### Modified Files for Sprint 4
+* `backend/src/fbi/fbiFetcher.ts`: Core data retrieval, geocoding, crosswalk lookup, and FBI API communication logic.
+* `backend/src/fbi/fbiHandler.ts`: Express route controller for `/arrests` parameter validation and response formatting.
+* `backend/src/csv/csvHandler.ts`: Express route controller for `/getcsv`.
+* `backend/src/csv/`: Directory housing the migrated Sprint 2 CSV parsing utilities (`parse.ts`, `tables32.ts`, `search.ts`, `utils.ts`, `serialize.ts`).
+* `backend/src/acs/acsFetcher.ts`: Reverse geocoding and Census ACS API query construction.
+* `backend/src/acs/acsHandler.ts`: Express route controller for `/acs` hierarchy validation and request handling.
+* `backend/src/server.ts`: Updated to register the `arrestsHandler`, `csvHandler`, and `acsHandler` routes.
+
+
+### Task E: Testing your server (Integration)
+
+#### 1. Initial Test Plan
+* **Endpoints to be tested**: `/arrests`, `/employment`, `/getcsv`, and `/acs`.
+* **Expected Requests and Responses**:
+  * **Success paths**: Valid coordinates and granularities should return 200 OK with the target data (e.g., JSON with `year`, `totalArrests`, etc.). `/getcsv` should return 200 OK with a parsed JSON array of the file contents.
+  * **State changes**: None of the Sprint 4 endpoints change the operational state of the server; they are strictly read-only `GET` requests serving external data.
+* **Error Responses expected**:
+  * 400 Bad Request: Missing required parameters (e.g., omitting `filepath` or `lat`/`lon` when required) or invalid hierarchy (e.g., `topLevel=county` and `bottomLevel=state` in `/acs`).
+  * 404/500 Internal Error: Upstream external API failures or file-not-found exceptions for local CSVs.
+
+#### 2. Agent Feedback
+I prompted the 0320 agent to critique this test plan. The agent suggested:
+1. Adding explicit boundary tests for the ACS hierarchy (e.g., testing when `topLevel` and `bottomLevel` are exactly the same, not just inverted).
+2. Testing the fallback routing logic in the `/employment` endpoint to ensure the secondary URL paths trigger correctly on a 404.
+3. Adding a test for directory traversal mitigation on `/getcsv` (e.g., requesting `../../etc/passwd`) to ensure it strictly returns an error.
+
+#### 3. Evaluation of Agent Feedback
+* **Helpful**: The suggestion to test identical top and bottom levels for ACS is a great edge case that ensures the `<=` logic works, not just `<`. The directory traversal test for `/getcsv` is also highly relevant given the Sprint 3 security supplement.
+* **Not Helpful**: The suggestion to test the `/employment` fallback routing is more suited for a unit test on the fetcher itself rather than a Playwright end-to-end integration test, as forcing the mock server to selectively return 404s for specific paths overcomplicates the HTTP testing layer.
+
+
+### Task X: Attack the Mock Server
+
+#### Objective and Setup
+The goal of this task is to discover undocumented endpoints on the mock API server deployed at `http://cs0320-apis.cs.brown.edu:3232/apis/fuzz-api/` and exfiltrate sensitive personal or financial information. To accomplish this responsibly, our probing tool in `scripts/attack.ts` complies with all required safety guidelines:
+* It issues standard GET requests exclusively.
+* It enforces a pacing delay exceeding 25 milliseconds between sequential requests to prevent denial of service pressure on Brown University servers.
+* It monitors responses for HTTP 429 status codes, backing off and waiting whenever rate limiting thresholds are reached.
+
+#### Attack Methodology and Reconnaissance
+We configured the attack program with a targeted wordlist of high interest paths, focusing on common administration, credential, customer, database, and financial directories. 
+
+When executing the scan against the target root, the tool revealed differential HTTP status code behavior:
+1. Standard invalid paths such as `users`, `billing`, `finance`, `database`, and `secret` returned HTTP 404 Not Found.
+2. In contrast, the path `admin` returned HTTP 403 Forbidden.
+
+This differential response confirms the existence of an active internal administrative route on the server. Exposing divergent status codes between non-existent resources (404) and restricted existent resources (403) creates an information disclosure vulnerability, allowing unauthorized callers to map internal server architecture.
+
+#### Discovered Endpoints and Findings
+* Discovered Endpoint URL: `http://cs0320-apis.cs.brown.edu:3232/apis/fuzz-api/admin`
+* HTTP Request Method: GET
+* Access Result: HTTP 403 Forbidden (Confirmed existence of the restricted administrative controller)
+* Secondary Target Vectors: Nested administrative routes and parameterized sub paths under `/admin` represent the internal attack surface hosting protected records and accounts.
+
+
+### Task Y: Add a Mitigation
+
+#### Initial Design Tradeoffs
+To defend against endpoint discovery and fuzzing attacks, we evaluated the following mitigation strategies:
+1. Rate Limiting (IP-based): Tracking request frequencies per IP and returning 429 errors when thresholds are exceeded. 
+   * Tradeoff: It slows down attackers significantly and stops brute-force scanners, but could accidentally block legitimate users sharing a public IP (like a university NAT network).
+2. Uniform 404 Responses: Ensuring all invalid or unauthorized endpoints return the exact same generic 404 response length and status, preventing attackers from using 403 Forbidden statuses to map hidden paths.
+   * Tradeoff: Difficult to ensure constant response times across a complex router stack, and removes helpful debugging context for legitimate developers who make a typo.
+3. Honeypots: Creating fake hidden endpoints (e.g., "/admin/config") that automatically block any IP that accesses them. 
+   * Tradeoff: Highly effective against automated scanners, but adds maintenance overhead and risks permanently banning legitimate users who accidentally trigger the trap.
+
+#### AI Consultation Feedback
+I consulted an AI agent to review these mitigations.
+- Helpful: The agent recommended a "sliding window" rate limiter over a fixed-window one, which is much better at catching burst traffic from automated fuzzers. It also correctly pointed out that relying *only* on status codes (Uniform 404s) doesn't stop attackers from trying millions of combinations.
+- Not Helpful: The agent suggested using enterprise Web Application Firewalls (WAFs) like Cloudflare. While secure, this is completely out of scope for our local Express proxy server architecture.
+
+#### Implementation
+We implemented IP-based Rate Limiting using a custom middleware in "server.ts". It tracks request timestamps per IP in memory and blocks excessive requests (more than 50 requests per 10 seconds) with a 429 status code. This directly mitigates the high-frequency scanning we used in our own Task X fuzzer.
+
+GitHub link : https://github.com/cs0320-f26/proxy-gladiators95
+
+
+
+
+
+
+# Backend Server
+
+
+## Sprint 3: Mocking APIs
+
+### Task B Code Dive
+
+Step 1 High Level Architecture Summaries
+
+To explore the architecture of the project, we queried an AI assistant across three distinct dimensions:
+
+1. Client Server Communication Flow:
+The frontend client communicates over HTTP with an Express backend listening on port 3001. The server delegates incoming requests to dedicated handler functions registered in server.ts. The application organizes features into distinct modules that consume these endpoints to render maps, display search results, and manage itineraries.
+
+2. Data Ingestion and Processing Pipeline:
+The application acts as an ETL and spatial processing system. Raw tabular data enters through parser utility modules, which parse strings into rows, map fields against CSV headers, and validate objects using Zod schemas. Spatial pipelines ingest weather data, city coordinates, and redlining boundary polygons. Graph structures execute Dijkstra and multi stop search algorithms to compute routes over tile segments.
+
+3. Developer Entry Points and Operational State:
+The central backend entry point is server.ts, which configures CORS, sets JSON body parsing limits, and mounts routes. To manage external API rate limits and computation overhead, the architecture uses in memory queues and caches.
+
+Reflection on Prompts
+1. Prompt 1 on Client Server communication gave the best view of how user interface interactions translate to server requests.
+2. Prompt 2 on the Data Pipeline was the most technically useful for our upcoming deliverables, clarifying how parser validation serves as the gateway for external data.
+3. Prompt 3 on Operational State helped us identify where stateful operations, such as queueing and caching, reside in the system.
+
+Step 2 Low Level Code Exploration
+
+What Parts of the Code We Need to Work With
+1. Parser utilities used to process CSV and tabular datasets with schema enforcement.
+2. Mock data and schemas for defining Zod schemas, arbitraries, and mock fetcher functions for external API endpoints.
+3. Route handlers understanding the dependency injection pattern used in handlers so mock functions can be substituted during testing.
+
+What We Understand
+1. Dependency Injection in Route Handlers: In server.ts, handlers accept fetcher functions as parameters. This design pattern allows swapping real network calls with mock functions during automated testing without modifying endpoint logic.
+2. CSV Parsing and Object Mapping: How parser utilities take raw text, parse it via state machines, dynamically key rows using header entries, and safely validate output records against Zod schemas.
+3. Separation of Graph Algorithms: Pathfinding logic is decoupled from tile loading, allowing path calculations to operate on cached or pre fetched graph slices.
+
+What Remains on Our Do Not Understand List
+1. Tile Cache Memory Bounds: How memory eviction functions under high loads, as there does not appear to be an active least recently used or time based expiration strategy.
+2. Spatial Generator Role: How the standalone spatial generator integrates with current HTTP endpoints, or if it functions as an isolated processing utility.
+
+
+
+### Task C: Experiment with Data Sources
+
+ Step 1 & 2: Manual and AI-Assisted Query Generation
+
+We experimented with manual browser queries and prompted an AI collaborator to help structure queries addressing the provided user stories:
+
+* **U.S. Census ACS API:**
+  - *User Story Coverage:* Queries targeting median household income (`B19013_001E`) and total population (`B01003_001E`) across both county level (`for=county:*&in=state:44`) and state level aggregates.
+  - *Key Structural Insight:* The API returns responses as nested arrays of strings where index 0 specifies column headers, requiring position-based index lookup rather than key-value JSON parsing.
+
+* **FBI Crime Reporting Statistics API:**
+  - *User Story Coverage:* 
+    1. Arrest and offense counts by state/offense category (e.g. violent crime summaries over reporting years).
+    2. Law enforcement employee counts (`/pe/agency/...`) capturing officer and civilian breakdowns for specific police departments.
+  - *Key Structural Insight:* The API returns nested JSON payloads containing arrays of reporting years, with potential optionality if an agency has missing reporting years.
+
+* **Census Geocoder API:**
+  - *User Story Coverage:* Translates latitude and longitude (e.g. Providence coordinates `-71.4025, 41.8268`) into geographic hierarchies.
+  - *Key Structural Insight:* Response paths `result.geographies.Counties` and `result.geographies.States` provide the FIPS codes (`STATE=44`, `COUNTY=007`) required as inputs for ACS API queries.
+
+### Step 3: Formatted TypeScript Queries
+Representative query and response pairs for all three services are exported in `backend/src/mockData.ts` as a structured registry (`mockDataRegistry`) for use in unit and mock testing.
+
+
+
+
+
+
+
+
+### Task D: Validating Responses
+
+ Schema Design & Critique
+
+We drafted Zod schemas for the Census ACS, FBI Crime, and Census Geocoder API responses and evaluated them against official API documentation:
+
+1. Census ACS Schema (CensusACSResponseSchema):
+   Modeled as z.array(z.array(z.string())).min(1).
+   Accepted Suggestion: Enforcing .min(1) to ensure the array contains at least the header row.
+   Rejected Suggestion: Coercing cell contents to numbers using z.coerce.number(). Because row 0 contains header names and missing or suppressed Census values are returned as annotations or special string codes, coercing cells to numbers would cause valid Census responses to fail parsing.
+
+2. FBI Crime Statistics Schemas (FBISummarizedCrimeResponseSchema and FBIPoliceEmployeeResponseSchema):
+   Modeled distinct payloads for crime summaries and police employment counts.
+   Accepted Suggestion: Using .optional() on specific crime counts and employment breakdowns because agency participation in UCR reporting varies by year, and missing categories must not invalidate the entire response payload.
+
+3. Census Geocoder Schema (CensusGeocoderResponseSchema):
+   Modeled the nested structure: result.geographies.Counties and result.geographies.States.
+   Rejected Suggestion: Requiring Counties to have at least one element via .min(1). According to Census Geocoder documentation, querying coordinates in coastal waters or unorganized territories returns an empty Counties array while still being a valid, successful response. We preserved z.array(...).default([]) instead.
+
+
+
+
+### Task E: Fuzzing Responses
+
+Using property based testing with fast check, we created arbitraries to generate randomized synthetic data for the Census ACS, FBI Crime, and Census Geocoder API responses. 
+
+We mapped the Zod schemas from Task D to corresponding fast check generators, ensuring all optional fields, numeric boundaries, and string patterns matched the official API specifications. Our test suite runs 100 iterations of these generators and asserts that every synthetic payload successfully parses through our Zod validators without error. This confirms our validation layer is robust against unexpected but technically valid edge cases.
+
+
+
+
+
+### Task F: Mock Testing
+
+AI Evaluation of Mocks
+
+We consulted an AI agent to generate three ideas for evaluating our mock functions and proving they suffice for a consumer. 
+
+1. Unified Schema Validation. Run the outputs of all three mock functions through the Zod schemas from Task D. If they all pass, they share the exact data contract.
+2. Handler Injection Test. Pass all three functions into a dummy Express route handler and verify the final HTTP JSON shape matches exactly.
+3. Deep Key Comparison. Recursively extract every property name from the three outputs and assert they are identical.
+
+We chose the first option because it directly integrates our previous validation work. We implemented a test suite that executes the static mock, the fuzzed mock, and the live network mock. We assert that all three successfully parse through CensusGeocoderResponseSchema. Since the validation passes for all three sources, they are structurally indistinguishable to the consumer.
+
+
+
+
+
+
+### Task G Reflection
+
+What has been new in this sprint
+
+At the technical level, constructing property based fuzz tests with fast check and enforcing runtime data integrity through Zod schemas was a significant learning experience. Generating hundreds of randomized structural variants to validate schemas exposed edge cases that static TypeScript types cannot catch alone, particularly optional fields in government crime statistics and coordinate boundary limits in geocoding payloads. Decoupling route handlers using dependency injection so that mock fetchers and real network requests share the identical contract was another practical technical pattern.
+
+At the conceptual level, the process reframed how external data contracts should be treated. External endpoints are fundamentally untrusted boundaries where remote changes, downtime, or missing fields can break client assumptions. Designing mocks not merely as static fixtures but as contract validated, fuzzed test doubles shifted our perspective from testing happy paths to engineering defensive ingestion pipelines.
+
+
+What to investigate further in the next sprint
+
+We want to focus on how caching layers and rate limiting queues scale when integrating multiple asynchronous external services concurrently. Specifically, investigating how in memory tile caches manage memory eviction and prevent unbounded growth under continuous usage, as well as how to coordinate dependency injected mocks across end to end integration workflows spanning both server handlers and the client user interface.
+
+
+
+
+
+
+#### Supplement (1340/S_DIST)
+Task X Protecting Your Data
+
+To prevent directory traversal attacks we propose a three layer defense strategy.
+
+1. Input Sanitization. Reject any request parameter containing dot characters or forward slashes to stop relative navigation immediately.
+
+2. Containment Bounds. Use path resolution to compute the absolute requested path. Verify this path strictly begins with the safe data directory absolute path. Return a 403 Forbidden status if it escapes the intended boundary.
+
+3. Identifier Lookup Registry. Replace direct filename requests with an alphanumeric identifier system. The server maps this token to a hardcoded safe path preventing direct file system manipulation by the client.
+
+This design is robust because it avoids single points of failure. The layered checks ensure no arbitrary system files are exposed even if one layer is bypassed.
+
+
+Task Y Implementing a Mitigation
+
+We implemented the containment bounds check using the Node path resolution module. 
+
+We placed our security tests in a dedicated unit test file isolated from the HTTP routing layers. Testing at the lowest utility level is the best approach because it validates the core file loading logic directly. This ensures that no vulnerable code paths exist regardless of how the endpoint controllers are configured in the future.
+
+The test suite verifies that requesting files outside the designated data directory throws a strict security exception. We wrote tests to cover both relative traversals using dot notation and direct absolute path injections. Both attempts successfully trigger the access denied error guaranteeing that the containment boundary holds firm. Valid local requests resolve perfectly.
+
+
+
+#### Collaborators (cslogins of anyone you worked with on this project or generative AI):
+dvkulkar (myself), 0320 agent
+
+
+#### Total estimated time it took to complete project: 12 hours
+
+#### Link to GitHub Repo: https://github.com/cs0320-f26/server-hi
+
+---
+
+
+
+
+
+## Setup & Installation
+
+`npm install`
+Also create a .env file and paste
+
+NOAA_API_TOKEN= get your token from here https://www.ncdc.noaa.gov/cdo-web/token
+PORT=3001
+SPREADSHEET=https://docs.google.com/spreadsheets/d/1966LRbZilujssoH7i9mXXpTeDbQ9RDStNPl0sNibOvw/export?format=csv&gid=0
+
+Add only after sprint 6 but you will find these inside of your firebase console
+FIREBASE_PROJECT_ID= ...
+FIREBASE_CLIENT_EMAIL= ...
+FIREBASE_PRIVATE_KEY= ...
+
+at last download the redlinning data and create a data folder under backend, inside palce a file named redliningData.json found here:
+https://drive.google.com/file/d/1vCFbyVQl_5ABWLulOGKhuuiWA1i2cK_R/view?usp=drive_link
+
+## Scripts
+
+| Command                  | Description                                             |
+| ------------------------ | ------------------------------------------------------- | ------------------------------- |
+| `npm run dev`            | Start server in development mode using ts-node.         |
+| `npm run debug`          | Start server with Node.js inspector for debugging.      | Go to chrome://inspect/#devices |
+| `npm run test`           | Run all tests using Vitest.                             |
+| `npm run test:watch`     | Run Vitest in watch mode.                               |
+| `npm run test:external`  | Run tests that require external resources.              |
+| `npm run test:file`      | Run Vitest for a single file.                           |
+| ------------------------ | ------------------------------------------------------- |
+
+---
+
+## Endpoints
+
+### Activities
+
+- **POST /upload-csv**: Uploads CSV from Google Sheets or local file and caches activities.
+- **GET /activityLocations**: Returns initial activity locations from sample CSV.
+
+### Weather
+
+- **POST /upload-weather-csv**: Fetches weather data for loaded tiles, computes Voronoi polygons, and assigns weather to activities.
+
+### Tiles
+
+- **POST /update-visible-tiles**: Updates visible tiles and triggers activity, graph, and weather updates.
+
+### Redlining
+
+- **POST /highlight-redlining**: Returns redlining features filtered by visible tiles.
+
+### Filters
+
+- **POST /filter**: Filters activities by criteria (boolean or operator-based).
+
+### Routing
+
+- **POST /find-path**: Calculates best routes through activities using multi-stop A\*.
